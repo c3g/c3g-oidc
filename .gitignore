@@ -1,0 +1,17 @@
+# Virtual env
+venv
+.venv
+
+# Misc
+*.pyc
+__pycache__/
+.DS_Store
+.pdm*
+pdm.lock
+
+# Build/test artifacts
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.coverage

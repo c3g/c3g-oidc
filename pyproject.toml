@@ -1,0 +1,52 @@
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[project]
+name = "c3g-oidc"
+dynamic = ["version"]
+authors = [
+  { name="Paul Stretenowich", email="paul.stretenowich@mcgill.ca" },
+]
+description = "In-app OIDC client (Flask token validation + CLI device-code login) for C3G web apps"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+server = [
+    "flask>=2.2.2",
+    "joserfc>=1.0",
+]
+test = [
+    "pytest",
+    "coverage",
+    "cryptography",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/c3g/c3g-oidc"
+"Bug Tracker" = "https://github.com/c3g/c3g-oidc/issues"
+
+[tool.pdm]
+allow-direct-references = true
+
+[tool.pdm.version]
+source = "file"
+path = "c3g_oidc/__version__.py"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+
+[tool.coverage]
+run.branch = true
+run.source = ["c3g_oidc"]
