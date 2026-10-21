@@ -93,5 +93,7 @@ free port) rather than mocking `requests` — `test_server.py` signs real RSA JW
 real JWKS; `test_client.py` runs a scriptable mock RFC 8628 authorization server. No live
 network access or real COmanage instance is needed for either.
 
-(No CI workflow yet — see repo TODOs / issues. Licensed GPL-3.0, matching `project_tracking`
+CI (`.github/workflows/test.yml`) runs the suite on Python 3.11–3.15.
+
+(Licensed GPL-3.0, matching `project_tracking`
 and `project_tracking_cli` — see `LICENSE`.)
