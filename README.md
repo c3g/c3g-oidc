@@ -23,6 +23,8 @@ the device-code flow (including `authorization_pending`, `slow_down`, `access_de
 expiry, caching, and refresh) against a real mock authorization server. See
 [CLAUDE.md](CLAUDE.md) for how to run either yourself.
 
+**Pre-1.0:** the API may change between minor versions until a first app has adopted it.
+
 ## Install
 
 ```bash
