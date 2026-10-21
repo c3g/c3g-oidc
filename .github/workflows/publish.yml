@@ -1,0 +1,51 @@
+name: Publish to PyPI
+
+# Publishing a GitHub Release (tag vX.Y.Z) builds the package and uploads it to PyPI with
+# trusted publishing: no API token is stored anywhere. The tag must match __version__.py.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Check the release tag matches the package version
+        run: |
+          version=$(python -c 'import runpy; print(runpy.run_path("c3g_oidc/__version__.py")["__version__"])')
+          tag="${GITHUB_REF_NAME}"
+          if [ "v${version}" != "${tag}" ]; then
+            echo "::error::Release tag ${tag} doesn't match __version__.py (${version}); expected v${version}"
+            exit 1
+          fi
+      - name: Build
+        run: |
+          python -m pip install build twine
+          python -m build
+          twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/c3g-oidc
+    permissions:
+      id-token: write  # trusted publishing: lets PyPI verify this run came from this workflow
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
