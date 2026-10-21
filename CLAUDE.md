@@ -95,5 +95,15 @@ network access or real COmanage instance is needed for either.
 
 CI (`.github/workflows/test.yml`) runs the suite on Python 3.11–3.15.
 
+
+## Releasing
+
+Publishing a GitHub Release publishes to PyPI (`.github/workflows/publish.yml`, trusted
+publishing through the `pypi` environment, no API token stored anywhere):
+
+1. In a PR, bump `c3g_oidc/__version__.py` (e.g. `0.2.0`) and merge it.
+2. `gh release create v0.2.0 --generate-notes` (or the repo's Releases page). The tag must be
+   `v` + the version in `__version__.py`, or the workflow stops before building.
+
 (Licensed GPL-3.0, matching `project_tracking`
 and `project_tracking_cli` — see `LICENSE`.)
