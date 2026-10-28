@@ -191,3 +191,16 @@ def test_get_access_token_falls_back_to_login_when_refresh_fails(mock_idp, tmp_p
         issuer_url, "client1", str(tmp_path / "token.json"), display=lambda m: None
     )
     assert session.get_access_token() == "fresh-login-tok"
+
+
+def test_explicit_endpoints_skip_discovery(mock_idp, tmp_path: Path):
+    """With both endpoints given, e.g. an app's forwarding routes, the issuer URL is never contacted."""
+    idp_url = mock_idp(
+        device_auth=_device_auth(),
+        token_sequence=[(200, {"access_token": "tok-explicit", "expires_in": 3600})],
+    )
+    session = DeviceCodeSession(
+        "http://127.0.0.1:1", "client1", str(tmp_path / "token.json"), display=lambda message: None,
+        device_authorization_endpoint=f"{idp_url}/device_authorization", token_endpoint=f"{idp_url}/token",
+    )
+    assert session.login() == "tok-explicit"

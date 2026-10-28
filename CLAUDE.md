@@ -25,12 +25,16 @@ c3g_oidc/
   discovery.py       # discover() -- shared OIDC discovery, no Flask/joserfc dependency
   server/
     validator.py      # BearerTokenValidator -- signature/expiry/issuer/audience via joserfc
+    broker.py         # device_flow_broker -- forwards a CLI's device-code login with the app's secret
   client/
     device_flow.py     # DeviceCodeSession -- RFC 8628 device-code login + refresh
+    client_credentials.py  # ClientCredentialsSession -- robots: client credentials grant, in-memory cache
     token_store.py       # on-disk token cache, used by device_flow
 tests/
   test_server.py            # real RSA-signed JWTs against a real HTTP-served JWKS
   test_client.py             # real RFC 8628 flow against a mock authorization server
+  test_client_credentials.py # robots' token requests against a mock token endpoint
+  test_broker.py             # the forwarding routes against a recording mock issuer
 ```
 
 ## Design notes
@@ -72,6 +76,15 @@ tests/
   `OAUTH2_PROXY_OIDC_GROUPS_CLAIM` convention used elsewhere in this stack (see
   `web-app-template`'s `for-maintainers.md`) — so a Rego policy in `c3g-opa-policies` doesn't
   have to special-case which tier (3a vs 3b) produced its `input.groups`.
+
+- **The broker forwards an allowlist, never the request as is.** `device_flow_broker` holds a
+  confidential client's secret, so its token route accepts only the device-code and refresh-token
+  grants, each with its own parameters, and always sends the app's client id and secret. Forwarding
+  `client_credentials` would hand the client's own token to anyone; forwarding other parameters
+  would let a caller pick the grant's behaviour. Keep the allowlist in `FORWARDED_GRANTS` and test
+  every addition.
+- **Confidential-client credentials go in the request body** (`client_secret_post`), not HTTP
+  Basic: COmanage client ids contain ':', which Basic can't carry without form-encoding.
 
 ## Why joserfc, not `authlib.jose`
 

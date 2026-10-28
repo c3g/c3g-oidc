@@ -188,3 +188,23 @@ def test_jwks_uri_override_skips_discovery(signing_key):
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_list_of_audiences_accepts_each_and_nothing_else(issuer, signing_key):
+    """An app trusting its CLI's client and a robot's client accepts tokens for either."""
+    issuer_url, _ = issuer
+    validator = BearerTokenValidator(issuer_url, [AUDIENCE, "robot-client"])
+    assert validator.validate(make_token(signing_key, iss=issuer_url, groups=["g"])) == ["g"]
+    assert validator.validate(make_token(signing_key, iss=issuer_url, aud="robot-client")) == []
+    with pytest.raises(TokenValidationError):
+        validator.validate(make_token(signing_key, iss=issuer_url, aud="other-app"))
+
+
+def test_validate_claims_returns_the_whole_token(issuer, signing_key):
+    issuer_url, _ = issuer
+    validator = BearerTokenValidator(issuer_url, AUDIENCE)
+    token = make_token(signing_key, iss=issuer_url, sub="user-1", client_id="robot-client")
+    claims = validator.validate_claims(token)
+    assert claims["sub"] == "user-1" and claims["client_id"] == "robot-client" and claims["aud"] == AUDIENCE
+    with pytest.raises(TokenValidationError):
+        validator.validate_claims(make_token(signing_key, iss=issuer_url, exp_delta=-3600))

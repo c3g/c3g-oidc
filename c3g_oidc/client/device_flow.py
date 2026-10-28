@@ -52,6 +52,10 @@ class DeviceCodeSession:
     display:
         Callable given the message to show the user (verification URL + code). Defaults to
         `print`; pass something else to route it through a CLI's own output/logging.
+    device_authorization_endpoint, token_endpoint:
+        Explicit endpoints, overriding the ones discovery finds. With both given, there is no
+        discovery at all: e.g. an app's own forwarding routes (`c3g_oidc.server.device_flow_broker`)
+        that add a confidential client's secret, which then never reaches the CLI.
     """
 
     def __init__(
@@ -63,6 +67,8 @@ class DeviceCodeSession:
         scope: str | None = None,
         timeout: float = 10.0,
         display=print,
+        device_authorization_endpoint: str | None = None,
+        token_endpoint: str | None = None,
     ) -> None:
         self.issuer_url = issuer_url.rstrip("/")
         self.client_id = client_id
@@ -71,10 +77,21 @@ class DeviceCodeSession:
         self._display = display
         self._store = TokenStore(token_cache_path)
         self._metadata: dict | None = None
+        self._endpoints = {
+            name: url
+            for name, url in (
+                ("device_authorization_endpoint", device_authorization_endpoint),
+                ("token_endpoint", token_endpoint),
+            )
+            if url
+        }
 
     def _get_metadata(self) -> dict:
         if self._metadata is None:
-            self._metadata = discover(self.issuer_url, timeout=self.timeout)
+            if len(self._endpoints) == 2:
+                self._metadata = dict(self._endpoints)
+            else:
+                self._metadata = {**discover(self.issuer_url, timeout=self.timeout), **self._endpoints}
         return self._metadata
 
     def get_access_token(self) -> str:

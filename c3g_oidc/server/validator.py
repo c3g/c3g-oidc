@@ -41,7 +41,8 @@ class BearerTokenValidator:
         discover the issuer's `jwks_uri` (via `.well-known/openid-configuration`) unless
         `jwks_uri` is given explicitly.
     audience:
-        This app's expected ``aud`` claim. Tokens issued for a different app are rejected.
+        This app's expected ``aud`` claim, or a list of them (e.g. the client its CLI logs in
+        with, plus each robot's client). Tokens issued for any other audience are rejected.
     groups_claim:
         Name of the token claim holding the user's group memberships. Defaults to
         ``"groups"``, matching oauth2-proxy's ``OAUTH2_PROXY_OIDC_GROUPS_CLAIM`` convention
@@ -63,7 +64,7 @@ class BearerTokenValidator:
     def __init__(
         self,
         issuer_url: str,
-        audience: str,
+        audience: str | list[str],
         groups_claim: str = "groups",
         *,
         jwks_uri: str | None = None,
@@ -73,7 +74,7 @@ class BearerTokenValidator:
         timeout: float = 5.0,
     ) -> None:
         self.issuer_url = issuer_url.rstrip("/")
-        self.audience = audience
+        self.audience = [audience] if isinstance(audience, str) else list(audience)
         self.groups_claim = groups_claim
         self.algorithms = algorithms or ["RS256"]
         self.leeway = leeway
@@ -103,12 +104,23 @@ class BearerTokenValidator:
         return jwks
 
     def validate(self, bearer_token: str) -> list[str]:
-        """Validate `bearer_token` and return its groups claim as a list of strings.
+        """Validate `bearer_token` and return its groups claim as a list of strings (see
+        `validate_claims` for the rest of the token: who it is, which client).
 
         Raises `TokenValidationError` on any invalid/expired/wrong-issuer/wrong-audience/
         wrong-signature token, or if the issuer's signing keys couldn't be fetched -- never
         returns an empty or partial result for a bad token. Fail closed: the caller should
         treat any exception here as "reject the request", not "no groups".
+        """
+        groups = self.validate_claims(bearer_token).get(self.groups_claim, [])
+        if not isinstance(groups, list):
+            return []
+        return [str(group) for group in groups]
+
+    def validate_claims(self, bearer_token: str) -> dict:
+        """Validate `bearer_token` like `validate`, and return all its claims: e.g. ``sub``, and
+        ``client_id``/``azp`` to tell a robot's token (client credentials, no groups) from a
+        person's. Raises `TokenValidationError` the same way.
         """
         if not bearer_token:
             raise TokenValidationError("empty bearer token")
@@ -120,7 +132,7 @@ class BearerTokenValidator:
             registry = JWTClaimsRegistry(
                 leeway=self.leeway,
                 iss={"essential": True, "value": self.issuer_url},
-                aud={"essential": True, "value": self.audience},
+                aud={"essential": True, "values": self.audience},
                 exp={"essential": True},
             )
             registry.validate(token.claims)
@@ -128,8 +140,4 @@ class BearerTokenValidator:
             raise TokenValidationError(str(exc)) from exc
         except requests.RequestException as exc:
             raise TokenValidationError(f"could not fetch signing keys: {exc}") from exc
-
-        groups = token.claims.get(self.groups_claim, [])
-        if not isinstance(groups, list):
-            return []
-        return [str(group) for group in groups]
+        return dict(token.claims)
