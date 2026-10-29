@@ -55,6 +55,22 @@ def load_groups():
 `validator.validate_claims(token)` returns every claim (`sub`, `client_id`, ...), to tell a robot
 from a person.
 
+#### Groups from userinfo
+
+CILogon puts a client's `groups` claim in the ID token and userinfo, not in its JWT access tokens.
+`UserinfoGroups` reads them from the issuer's userinfo endpoint with the access token, after the
+validator accepted it, and caches the answer per token (until it expires, `max_age` 5 minutes at most):
+
+```python
+from c3g_oidc.server import UserinfoGroups, UserinfoUnavailableError
+
+userinfo = UserinfoGroups("https://cilogon.org")
+claims = validator.validate_claims(token)
+groups = claims.get("groups")
+if groups is None and not is_robot(claims):   # robots (client credentials) have no user
+    groups = userinfo.groups(token, claims)   # TokenValidationError -> 401, UserinfoUnavailableError -> 503
+```
+
 #### Confidential client, CLI login through the app
 
 When the identity provider only releases groups to a confidential client (COmanage/CILogon public

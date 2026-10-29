@@ -78,6 +78,12 @@ tests/
   `web-app-template`'s `for-maintainers.md`) — so a Rego policy in `c3g-opa-policies` doesn't
   have to special-case which tier (3a vs 3b) produced its `input.groups`.
 
+- **Userinfo groups live outside `BearerTokenValidator`.** The validator stays a local check;
+  `UserinfoGroups` makes the network call, so the app decides when (not for robots). Its cache is
+  keyed by the token's SHA-256 and lasts until `exp`, never more than `max_age` (an issuer raising
+  token lifetimes mustn't keep removed groups longer). A userinfo 401/403 or another `sub` is
+  `TokenValidationError` (log in again); an issuer that can't answer is `UserinfoUnavailableError`
+  (503), never "no groups", and isn't cached. The endpoint must be on the issuer's own origin.
 - **The broker forwards an allowlist, never the request as is.** `device_flow_broker` holds a
   confidential client's secret, so its token route accepts only the device-code and refresh-token
   grants, each with its own parameters, and always sends the app's client id and secret. Forwarding
