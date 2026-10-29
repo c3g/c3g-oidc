@@ -204,3 +204,32 @@ def test_explicit_endpoints_skip_discovery(mock_idp, tmp_path: Path):
         device_authorization_endpoint=f"{idp_url}/device_authorization", token_endpoint=f"{idp_url}/token",
     )
     assert session.login() == "tok-explicit"
+
+
+def test_non_interactive_raises_instead_of_logging_in(mock_idp, tmp_path: Path):
+    issuer_url = mock_idp(
+        device_auth=_device_auth(),
+        token_sequence=[(200, {"access_token": "should-not-be-used", "expires_in": 3600})],
+        refresh_response=(400, {"error": "invalid_grant"}),
+    )
+    store = TokenStore(str(tmp_path / "token.json"))
+    session = DeviceCodeSession(issuer_url, "client1", str(tmp_path / "token.json"), display=pytest.fail)
+
+    with pytest.raises(DeviceLoginError, match="not logged in"):
+        session.get_access_token(interactive=False)
+    store.save(
+        {"access_token": "old-tok", "refresh_token": "old-ref", "expires_at": time.time() - 100, "token_type": "Bearer"}
+    )
+    with pytest.raises(DeviceLoginError, match="not logged in"):
+        session.get_access_token(interactive=False)
+
+
+def test_logout_forgets_the_token(tmp_path: Path):
+    store = TokenStore(str(tmp_path / "token.json"))
+    store.save({"access_token": "tok", "expires_at": time.time() + 3600})
+    session = DeviceCodeSession("http://127.0.0.1:1", "client1", str(tmp_path / "token.json"))
+
+    session.logout()
+    session.logout()
+
+    assert store.load() is None

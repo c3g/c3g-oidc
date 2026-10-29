@@ -94,9 +94,12 @@ class DeviceCodeSession:
                 self._metadata = {**discover(self.issuer_url, timeout=self.timeout), **self._endpoints}
         return self._metadata
 
-    def get_access_token(self) -> str:
+    def get_access_token(self, *, interactive: bool = True) -> str:
         """Return a valid access token: from cache, refreshed, or via a fresh interactive
         device-code login, in that order of preference.
+
+        With `interactive=False` (a cron job, nobody to open the verification URL), raise
+        `DeviceLoginError` instead of starting a login when there is no usable token.
         """
         token = self._store.load()
 
@@ -108,7 +111,15 @@ class DeviceCodeSession:
             if refreshed is not None:
                 return refreshed["access_token"]
 
+        if not interactive:
+            raise DeviceLoginError("not logged in, or the login expired: log in again")
         return self.login()
+
+    def logout(self) -> None:
+        """Forget the cached token. The issuer's session isn't ended; the refresh token simply
+        isn't used again.
+        """
+        self._store.clear()
 
     def login(self) -> str:
         """Run the interactive device-code login flow: print a verification URL and code,

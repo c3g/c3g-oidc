@@ -68,7 +68,8 @@ tests/
 - **A failed refresh falls back to a fresh `login()`, it doesn't raise.** `DeviceLoginError` is
   reserved for the device-code flow itself failing or expiring — a stale/revoked refresh token
   is an expected, recoverable case (`get_access_token()` handles it by re-authenticating), not
-  an error the caller needs to handle specially.
+  an error the caller needs to handle specially. With `get_access_token(interactive=False)`
+  (no one at the terminal) there is nothing to fall back to, so it raises `DeviceLoginError`.
 - **Token cache location is the caller's choice, not a hardcoded default.**
   `DeviceCodeSession` takes `token_cache_path` explicitly (see `TokenStore`) — different CLIs,
   or the same CLI against different COmanage environments, need different cache files.

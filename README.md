@@ -85,6 +85,8 @@ session = DeviceCodeSession(
 
 token = session.get_access_token()  # interactive device-code login on first use,
                                      # silent cache/refresh on every call after that
+session.get_access_token(interactive=False)  # cache or refresh only: DeviceLoginError otherwise
+session.logout()                             # forget the cached token
 ```
 
 Through an app's forwarding routes, give both endpoints: there is then no discovery, and the CLI
