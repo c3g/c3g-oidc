@@ -25,12 +25,16 @@ c3g_oidc/
   discovery.py       # discover() -- shared OIDC discovery, no Flask/joserfc dependency
   server/
     validator.py      # BearerTokenValidator -- signature/expiry/issuer/audience via joserfc
+    broker.py         # device_flow_broker -- forwards a CLI's device-code login with the app's secret
   client/
     device_flow.py     # DeviceCodeSession -- RFC 8628 device-code login + refresh
+    client_credentials.py  # ClientCredentialsSession -- robots: client credentials grant, in-memory cache
     token_store.py       # on-disk token cache, used by device_flow
 tests/
   test_server.py            # real RSA-signed JWTs against a real HTTP-served JWKS
   test_client.py             # real RFC 8628 flow against a mock authorization server
+  test_client_credentials.py # robots' token requests against a mock token endpoint
+  test_broker.py             # the forwarding routes against a recording mock issuer
 ```
 
 ## Design notes
@@ -64,7 +68,8 @@ tests/
 - **A failed refresh falls back to a fresh `login()`, it doesn't raise.** `DeviceLoginError` is
   reserved for the device-code flow itself failing or expiring — a stale/revoked refresh token
   is an expected, recoverable case (`get_access_token()` handles it by re-authenticating), not
-  an error the caller needs to handle specially.
+  an error the caller needs to handle specially. With `get_access_token(interactive=False)`
+  (no one at the terminal) there is nothing to fall back to, so it raises `DeviceLoginError`.
 - **Token cache location is the caller's choice, not a hardcoded default.**
   `DeviceCodeSession` takes `token_cache_path` explicitly (see `TokenStore`) — different CLIs,
   or the same CLI against different COmanage environments, need different cache files.
@@ -72,6 +77,21 @@ tests/
   `OAUTH2_PROXY_OIDC_GROUPS_CLAIM` convention used elsewhere in this stack (see
   `web-app-template`'s `for-maintainers.md`) — so a Rego policy in `c3g-opa-policies` doesn't
   have to special-case which tier (3a vs 3b) produced its `input.groups`.
+
+- **Userinfo groups live outside `BearerTokenValidator`.** The validator stays a local check;
+  `UserinfoGroups` makes the network call, so the app decides when (not for robots). Its cache is
+  keyed by the token's SHA-256 and lasts until `exp`, never more than `max_age` (an issuer raising
+  token lifetimes mustn't keep removed groups longer). A userinfo 401/403 or another `sub` is
+  `TokenValidationError` (log in again); an issuer that can't answer is `UserinfoUnavailableError`
+  (503), never "no groups", and isn't cached. The endpoint must be on the issuer's own origin.
+- **The broker forwards an allowlist, never the request as is.** `device_flow_broker` holds a
+  confidential client's secret, so its token route accepts only the device-code and refresh-token
+  grants, each with its own parameters, and always sends the app's client id and secret. Forwarding
+  `client_credentials` would hand the client's own token to anyone; forwarding other parameters
+  would let a caller pick the grant's behaviour. Keep the allowlist in `FORWARDED_GRANTS` and test
+  every addition.
+- **Confidential-client credentials go in the request body** (`client_secret_post`), not HTTP
+  Basic: COmanage client ids contain ':', which Basic can't carry without form-encoding.
 
 ## Why joserfc, not `authlib.jose`
 

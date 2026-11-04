@@ -32,3 +32,7 @@ class TokenStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(token))
         self.path.chmod(0o600)
+
+    def clear(self) -> None:
+        """Delete the cached token, if any."""
+        self.path.unlink(missing_ok=True)

@@ -53,6 +53,43 @@ def load_groups():
 
 `g.groups` is then what you pass as the groups-source callable to `c3g-flask-opa`.
 
+`audience` can be a list, e.g. the client the CLI logs in with plus each robot's client.
+`validator.validate_claims(token)` returns every claim (`sub`, `client_id`, ...), to tell a robot
+from a person.
+
+#### Groups from userinfo
+
+CILogon puts a client's `groups` claim in the ID token and userinfo, not in its JWT access tokens.
+`UserinfoGroups` reads them from the issuer's userinfo endpoint with the access token, after the
+validator accepted it, and caches the answer per token (until it expires, `max_age` 5 minutes at most):
+
+```python
+from c3g_oidc.server import UserinfoGroups, UserinfoUnavailableError
+
+userinfo = UserinfoGroups("https://cilogon.org")
+claims = validator.validate_claims(token)
+groups = claims.get("groups")
+if groups is None and not is_robot(claims):   # robots (client credentials) have no user
+    groups = userinfo.groups(token, claims)   # TokenValidationError -> 401, UserinfoUnavailableError -> 503
+```
+
+#### Confidential client, CLI login through the app
+
+When the identity provider only releases groups to a confidential client (COmanage/CILogon public
+clients get `sub` only), keep the secret in the app and let the CLI log in through it:
+
+```python
+from c3g_oidc.server import device_flow_broker
+
+app.register_blueprint(device_flow_broker(
+    "https://cilogon.org", client_id, client_secret,       # the secret from a podman secret
+    scope="openid profile email org.cilogon.userinfo",
+))  # POST /auth/device_authorization and /auth/token: exempt them from the app's own auth
+```
+
+The routes add the client id and secret and forward to the provider. Only the device-code and
+refresh-token grants go through, with their own parameters only.
+
 ### Client half (inside a CLI)
 
 ```python
@@ -66,4 +103,26 @@ session = DeviceCodeSession(
 
 token = session.get_access_token()  # interactive device-code login on first use,
                                      # silent cache/refresh on every call after that
+session.get_access_token(interactive=False)  # cache or refresh only: DeviceLoginError otherwise
+session.logout()                             # forget the cached token
+```
+
+Through an app's forwarding routes, give both endpoints: there is then no discovery, and the CLI
+never holds the client's secret.
+
+```python
+session = DeviceCodeSession(
+    api_url, client_id="pt-cli", token_cache_path="~/.cache/pt_cli/token.json",
+    device_authorization_endpoint=f"{api_url}/auth/device_authorization",
+    token_endpoint=f"{api_url}/auth/token",
+)
+```
+
+A robot (cron, CI) logs in as its own confidential client instead, with no person involved:
+
+```python
+from c3g_oidc.client import ClientCredentialsSession
+
+robot = ClientCredentialsSession("https://cilogon.org", robot_client_id, robot_secret)
+token = robot.get_access_token()  # cached in memory, asked again with the secret once expired
 ```
