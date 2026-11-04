@@ -128,3 +128,25 @@ def test_missing_or_odd_groups_claim_gives_no_groups(issuer):
     assert UserinfoGroups(issuer["url"]).groups("tok-1", _claims()) == []
     issuer["answer"] = (200, {"sub": "user-1", "groups": "pt-admins"})
     assert UserinfoGroups(issuer["url"]).groups("tok-2", _claims()) == []
+
+
+def test_lookup_gives_the_groups_and_a_readable_identity(issuer):
+    userinfo = UserinfoGroups(issuer["url"])
+    issuer["answer"] = (200, {"sub": "user-1", "groups": ["pt-admins"], "email": "a@x.ca", "eppn": "a@idp.ca"})
+
+    answer = userinfo.lookup("tok-1", _claims())
+    assert (answer.groups, answer.identity) == (["pt-admins"], "a@idp.ca")
+    assert userinfo.groups("tok-1", _claims()) == ["pt-admins"]
+    assert issuer["calls"] == ["Bearer tok-1"]
+
+
+@pytest.mark.parametrize("body, identity", [
+    ({"email": "a@x.ca"}, "a@x.ca"),
+    ({"eppn": "", "email": "a@x.ca"}, "a@x.ca"),
+    ({"eppn": ["not", "a", "string"]}, None),
+    ({}, None),
+])
+def test_identity_falls_back_through_the_claims(issuer, body, identity):
+    issuer["answer"] = (200, {"sub": "user-1", "groups": [], **body})
+
+    assert UserinfoGroups(issuer["url"]).lookup("tok-1", _claims()).identity == identity
