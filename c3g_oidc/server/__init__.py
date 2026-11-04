@@ -1,10 +1,11 @@
 from .broker import device_flow_broker
-from .userinfo import UserinfoGroups, UserinfoUnavailableError
+from .userinfo import UserinfoAnswer, UserinfoGroups, UserinfoUnavailableError
 from .validator import BearerTokenValidator, TokenValidationError
 
 __all__ = [
     "BearerTokenValidator",
     "TokenValidationError",
+    "UserinfoAnswer",
     "UserinfoGroups",
     "UserinfoUnavailableError",
     "device_flow_broker",

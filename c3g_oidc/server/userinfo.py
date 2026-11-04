@@ -15,6 +15,8 @@ makes a network call, so the app chooses when to make it (e.g. not for robots, w
 - An issuer that can't answer (network, 5xx, a body that isn't a JSON object) raises
   `UserinfoUnavailableError`: the app answers 503, never "no groups" (which reads as "not allowed")
   and never 401 (which sends a CLI to log in again for nothing). Failures aren't cached.
+- `lookup` also gives a readable identity of the user from the same answer (e.g. ``eppn``), for
+  logs: the access token's ``sub`` is an opaque id. It never decides anything.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import requests
@@ -32,6 +35,14 @@ from .validator import TokenValidationError
 
 class UserinfoUnavailableError(Exception):
     """The userinfo endpoint couldn't answer: the request can't be decided now (503), it isn't refused."""
+
+
+@dataclass(frozen=True)
+class UserinfoAnswer:
+    """What `UserinfoGroups.lookup` reads from userinfo: the groups, and a readable identity for logs."""
+
+    groups: list[str]
+    identity: str | None
 
 
 def _origin(url: str) -> tuple[str, str]:
@@ -55,6 +66,9 @@ class UserinfoGroups:
         Longest time, in seconds, an answer is reused, whatever the token's lifetime.
     max_entries:
         Cache size; expired answers go first, then the oldest.
+    identity_claims:
+        Userinfo claims tried in order for the readable identity `lookup` returns (default
+        ``eppn``, then ``email``).
     """
 
     def __init__(
@@ -66,14 +80,16 @@ class UserinfoGroups:
         timeout: float = 3.0,
         max_age: float = 300.0,
         max_entries: int = 1024,
+        identity_claims: tuple[str, ...] = ("eppn", "email"),
     ) -> None:
         self.issuer_url = issuer_url.rstrip("/")
         self.groups_claim = groups_claim
         self.timeout = timeout
         self.max_age = max_age
         self.max_entries = max_entries
+        self.identity_claims = tuple(identity_claims)
         self._endpoint = userinfo_endpoint
-        self._cache: dict[str, tuple[float, list[str]]] = {}
+        self._cache: dict[str, tuple[float, UserinfoAnswer]] = {}
         self._lock = threading.Lock()
 
     def _userinfo_endpoint(self) -> str:
@@ -94,14 +110,20 @@ class UserinfoGroups:
         `claims`. Raises `TokenValidationError` when the issuer refuses the token, and
         `UserinfoUnavailableError` when it can't answer.
         """
+        return list(self.lookup(bearer_token, claims).groups)
+
+    def lookup(self, bearer_token: str, claims: dict) -> UserinfoAnswer:
+        """The groups and the readable identity of the user of `bearer_token`, from one (cached)
+        userinfo answer. Raises like `groups`.
+        """
         key = hashlib.sha256(bearer_token.encode()).hexdigest()
         now = time.time()
         with self._lock:
             cached = self._cache.get(key)
             if cached is not None and cached[0] > now:
-                return list(cached[1])
+                return UserinfoAnswer(list(cached[1].groups), cached[1].identity)
 
-        groups = self._fetch(bearer_token, claims.get("sub"))
+        answer = self._fetch(bearer_token, claims.get("sub"))
 
         expires_at = min(float(claims.get("exp", now)), now + self.max_age)
         with self._lock:
@@ -110,10 +132,10 @@ class UserinfoGroups:
                     del self._cache[stale]
             while len(self._cache) >= self.max_entries:
                 del self._cache[next(iter(self._cache))]
-            self._cache[key] = (expires_at, groups)
-        return list(groups)
+            self._cache[key] = (expires_at, answer)
+        return UserinfoAnswer(list(answer.groups), answer.identity)
 
-    def _fetch(self, bearer_token: str, sub) -> list[str]:
+    def _fetch(self, bearer_token: str, sub) -> UserinfoAnswer:
         endpoint = self._userinfo_endpoint()
         try:
             response = requests.get(
@@ -134,6 +156,7 @@ class UserinfoGroups:
         if not sub or body.get("sub") != sub:
             raise TokenValidationError("userinfo is about another user than the token")
         groups = body.get(self.groups_claim) or []
-        if not isinstance(groups, list):
-            return []
-        return [str(group) for group in groups]
+        groups = [str(group) for group in groups] if isinstance(groups, list) else []
+        identity = next((str(body[claim]) for claim in self.identity_claims
+                         if isinstance(body.get(claim), str) and body[claim].strip()), None)
+        return UserinfoAnswer(groups, identity)
