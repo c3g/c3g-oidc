@@ -6,6 +6,7 @@ caching, and refresh logic actually work end to end.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -209,6 +210,59 @@ def test_refused_refresh_uses_the_token_another_process_just_saved(mock_idp, tmp
     session = DeviceCodeSession(issuer_url, "client1", str(tmp_path / "token.json"), display=pytest.fail)
 
     assert session.get_access_token(interactive=False) == "other-tok"
+
+
+def test_concurrent_refreshes_send_the_refresh_token_once(mock_idp, tmp_path: Path):
+    """Commands of a cron job refreshing at once: one refresh reaches the issuer, the others wait and use its token.
+
+    The mock issuer rotates refresh tokens and refuses a reused one, as an issuer detecting a stolen token would.
+    """
+    calls = []
+    valid = {"old-ref"}
+
+    def rotating_issuer():
+        sent = request.form["refresh_token"]
+        calls.append(sent)
+        time.sleep(0.3)  # long enough for the other commands to reach the refresh
+        if sent not in valid:
+            return 400, {"error": "invalid_grant"}
+        valid.discard(sent)
+        valid.add(f"ref-{len(calls)}")
+        return 200, {"access_token": f"tok-{len(calls)}", "refresh_token": f"ref-{len(calls)}", "expires_in": 3600}
+
+    issuer_url = mock_idp(device_auth=_device_auth(), token_sequence=[], refresh_response=rotating_issuer)
+    TokenStore(str(tmp_path / "token.json")).save(
+        {"access_token": "old-tok", "refresh_token": "old-ref", "expires_at": time.time() - 100, "token_type": "Bearer"}
+    )
+    results = []
+
+    def command():
+        session = DeviceCodeSession(issuer_url, "client1", str(tmp_path / "token.json"), display=pytest.fail)
+        results.append(session.get_access_token(interactive=False))
+
+    threads = [threading.Thread(target=command) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert calls == ["old-ref"]
+    assert results == ["tok-1"] * 3
+
+
+def test_token_folder_is_owner_only_and_planted_symlinks_are_not_followed(tmp_path: Path):
+    path = tmp_path / "tokens" / "token.json"
+    store = TokenStore(str(path))
+    store.save({"access_token": "tok1"})
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+    target = tmp_path / "elsewhere"
+    target.write_text("untouched")
+    (path.parent / f".token.json.{os.getpid()}.tmp").symlink_to(target)
+    store.save({"access_token": "tok2"})
+
+    assert target.read_text() == "untouched"
+    assert store.load() == {"access_token": "tok2"}
 
 
 def test_token_file_is_owner_only_and_replaced_whole(tmp_path: Path):

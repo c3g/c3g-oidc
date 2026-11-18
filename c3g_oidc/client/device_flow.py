@@ -107,7 +107,12 @@ class DeviceCodeSession:
             return token["access_token"]
 
         if token is not None and token.get("refresh_token"):
-            refreshed = self._try_refresh(token["refresh_token"])
+            with self._store.lock():
+                # Another process may have refreshed while this one waited for the lock
+                token = self._store.load()
+                if token is not None and not self._is_expired(token):
+                    return token["access_token"]
+                refreshed = self._try_refresh(token["refresh_token"]) if token and token.get("refresh_token") else None
             if refreshed is not None:
                 return refreshed["access_token"]
 
