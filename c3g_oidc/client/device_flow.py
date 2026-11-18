@@ -210,13 +210,27 @@ class DeviceCodeSession:
                 timeout=self.timeout,
             )
             if response.status_code != 200:
-                return None
+                return self._refreshed_elsewhere(refresh_token)
             token = self._normalize_token(response.json())
         except requests.RequestException:
             return None
 
+        # An issuer that doesn't rotate refresh tokens sends none back (RFC 6749 §6): the
+        # current one stays valid, and dropping it would end the login at the next expiry
+        if not token["refresh_token"]:
+            token["refresh_token"] = refresh_token
         self._store.save(token)
         return token
+
+    def _refreshed_elsewhere(self, refresh_token: str) -> dict | None:
+        """The token another process saved while this one refreshed with the same refresh
+        token (two commands of a cron job at once): an issuer that rotates refresh tokens
+        refuses the second refresh, but the first one's token is in the store.
+        """
+        token = self._store.load()
+        if token is not None and token.get("refresh_token") != refresh_token and not self._is_expired(token):
+            return token
+        return None
 
     def _normalize_token(self, body: dict) -> dict:
         return {

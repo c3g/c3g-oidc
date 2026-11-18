@@ -3,12 +3,13 @@
 A plain JSON file at a caller-chosen path (see `DeviceCodeSession`) -- no Flask, no
 server-side dependency. Deliberately simple: this is a cache, not a secret store. Callers are
 responsible for where they point it (e.g. a path under their own config/cache dir); this class
-only tightens the file's permissions after writing it.
+only keeps the file owner-only.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 
@@ -30,8 +31,18 @@ class TokenStore:
         read/write.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(token))
-        self.path.chmod(0o600)
+        # Written to a file that is owner-only from its creation, then moved over the old one:
+        # never readable by others, and a concurrent reader never sees a half-written file
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as file:
+                file.write(json.dumps(token))
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def clear(self) -> None:
         """Delete the cached token, if any."""
