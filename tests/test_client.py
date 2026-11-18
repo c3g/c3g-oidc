@@ -6,6 +6,7 @@ caching, and refresh logic actually work end to end.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -50,7 +51,7 @@ def mock_idp():
             if request.form.get("grant_type") == "refresh_token":
                 if refresh_response is None:
                     return jsonify({"error": "invalid_grant"}), 400
-                status, body = refresh_response
+                status, body = refresh_response() if callable(refresh_response) else refresh_response
                 return jsonify(body), status
 
             index = state["poll_index"]
@@ -175,6 +176,105 @@ def test_get_access_token_refreshes_expired_token(mock_idp, tmp_path: Path):
     session = DeviceCodeSession(issuer_url, "client1", str(tmp_path / "token.json"))
     assert session.get_access_token() == "refreshed-tok"
     assert store.load()["access_token"] == "refreshed-tok"
+
+
+def test_refresh_keeps_the_refresh_token_when_the_issuer_sends_none(mock_idp, tmp_path: Path):
+    """An issuer that doesn't rotate refresh tokens: the login must survive the next expiry too."""
+    issuer_url = mock_idp(
+        device_auth=_device_auth(),
+        token_sequence=[],
+        refresh_response=(200, {"access_token": "refreshed-tok", "expires_in": 3600}),
+    )
+    store = TokenStore(str(tmp_path / "token.json"))
+    store.save(
+        {"access_token": "old-tok", "refresh_token": "old-ref", "expires_at": time.time() - 100, "token_type": "Bearer"}
+    )
+    session = DeviceCodeSession(issuer_url, "client1", str(tmp_path / "token.json"), display=pytest.fail)
+
+    assert session.get_access_token(interactive=False) == "refreshed-tok"
+    assert store.load()["refresh_token"] == "old-ref"
+
+
+def test_refused_refresh_uses_the_token_another_process_just_saved(mock_idp, tmp_path: Path):
+    """Two commands refresh at once with a rotating issuer: the second refresh is refused, the first one's token is used."""
+    store = TokenStore(str(tmp_path / "token.json"))
+
+    def refreshed_by_the_other_process():
+        store.save({"access_token": "other-tok", "refresh_token": "rotated-ref", "expires_at": time.time() + 3600})
+        return 400, {"error": "invalid_grant"}
+
+    issuer_url = mock_idp(device_auth=_device_auth(), token_sequence=[], refresh_response=refreshed_by_the_other_process)
+    store.save(
+        {"access_token": "old-tok", "refresh_token": "old-ref", "expires_at": time.time() - 100, "token_type": "Bearer"}
+    )
+    session = DeviceCodeSession(issuer_url, "client1", str(tmp_path / "token.json"), display=pytest.fail)
+
+    assert session.get_access_token(interactive=False) == "other-tok"
+
+
+def test_concurrent_refreshes_send_the_refresh_token_once(mock_idp, tmp_path: Path):
+    """Commands of a cron job refreshing at once: one refresh reaches the issuer, the others wait and use its token.
+
+    The mock issuer rotates refresh tokens and refuses a reused one, as an issuer detecting a stolen token would.
+    """
+    calls = []
+    valid = {"old-ref"}
+
+    def rotating_issuer():
+        sent = request.form["refresh_token"]
+        calls.append(sent)
+        time.sleep(0.3)  # long enough for the other commands to reach the refresh
+        if sent not in valid:
+            return 400, {"error": "invalid_grant"}
+        valid.discard(sent)
+        valid.add(f"ref-{len(calls)}")
+        return 200, {"access_token": f"tok-{len(calls)}", "refresh_token": f"ref-{len(calls)}", "expires_in": 3600}
+
+    issuer_url = mock_idp(device_auth=_device_auth(), token_sequence=[], refresh_response=rotating_issuer)
+    TokenStore(str(tmp_path / "token.json")).save(
+        {"access_token": "old-tok", "refresh_token": "old-ref", "expires_at": time.time() - 100, "token_type": "Bearer"}
+    )
+    results = []
+
+    def command():
+        session = DeviceCodeSession(issuer_url, "client1", str(tmp_path / "token.json"), display=pytest.fail)
+        results.append(session.get_access_token(interactive=False))
+
+    threads = [threading.Thread(target=command) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert calls == ["old-ref"]
+    assert results == ["tok-1"] * 3
+
+
+def test_token_folder_is_owner_only_and_planted_symlinks_are_not_followed(tmp_path: Path):
+    path = tmp_path / "tokens" / "token.json"
+    store = TokenStore(str(path))
+    store.save({"access_token": "tok1"})
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+    target = tmp_path / "elsewhere"
+    target.write_text("untouched")
+    (path.parent / f".token.json.{os.getpid()}.tmp").symlink_to(target)
+    store.save({"access_token": "tok2"})
+
+    assert target.read_text() == "untouched"
+    assert store.load() == {"access_token": "tok2"}
+
+
+def test_token_file_is_owner_only_and_replaced_whole(tmp_path: Path):
+    path = tmp_path / "tokens" / "token.json"
+    store = TokenStore(str(path))
+    store.save({"access_token": "tok1"})
+    path.chmod(0o644)
+    store.save({"access_token": "tok2"})
+
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert store.load() == {"access_token": "tok2"}
+    assert [p.name for p in path.parent.iterdir()] == ["token.json"]
 
 
 def test_get_access_token_falls_back_to_login_when_refresh_fails(mock_idp, tmp_path: Path):

@@ -107,6 +107,10 @@ session.get_access_token(interactive=False)  # cache or refresh only: DeviceLogi
 session.logout()                             # forget the cached token
 ```
 
+The token file is a bearer credential: it is written with mode 600, in a folder created with mode 700. Processes
+of the same account can share it (e.g. the commands of a cron job): they refresh one at a time under a lock, so a
+refresh token is never sent twice, which an issuer rotating refresh tokens may take for a stolen one.
+
 Through an app's forwarding routes, give both endpoints: there is then no discovery, and the CLI
 never holds the client's secret.
 
