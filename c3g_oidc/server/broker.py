@@ -14,6 +14,9 @@ without logging in), authorization codes, or a caller's client id or secret.
 
 from __future__ import annotations
 
+import logging
+import uuid
+
 import requests
 from flask import Blueprint, jsonify, request
 
@@ -28,6 +31,8 @@ FORWARDED_GRANTS = {
 }
 # Token responses must not be cached (RFC 6749 §5.1)
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+logger = logging.getLogger(__name__)
 
 
 def device_flow_broker(
@@ -63,8 +68,14 @@ def device_flow_broker(
         data.update({"client_id": client_id, "client_secret": client_secret})
         try:
             response = requests.post(issuer_endpoint(key), data=data, timeout=timeout)
-        except (requests.RequestException, KeyError) as exc:
-            body = {"error": "temporarily_unavailable", "error_description": f"identity provider unreachable: {exc}"}
+        except (requests.RequestException, KeyError, ValueError) as exc:
+            # The routes are public: the error (URLs, proxies, hosts) goes to the log only, under a reference
+            reference = uuid.uuid4().hex[:12]
+            logger.error("Identity provider %s unreachable for %s (reference %s): %r", issuer_url, key, reference, exc)
+            body = {
+                "error": "temporarily_unavailable",
+                "error_description": f"identity provider unreachable, try again later (reference {reference})",
+            }
             return jsonify(body), 502, NO_STORE
         headers = {"Content-Type": response.headers.get("Content-Type", "application/json"), **NO_STORE}
         return response.content, response.status_code, headers
