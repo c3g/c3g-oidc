@@ -148,7 +148,17 @@ class DeviceCodeSession:
         response = requests.post(
             metadata["device_authorization_endpoint"], data=request_data, timeout=self.timeout
         )
-        response.raise_for_status()
+        if not response.ok:
+            # The issuer's (or the broker's) error and description, e.g. a reference to the app's log
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            body = body if isinstance(body, dict) else {}
+            raise DeviceLoginError(
+                f"device login could not start: {body.get('error') or response.status_code} "
+                f"({body.get('error_description', 'no description')})"
+            )
         device_auth = response.json()
 
         verification_uri = device_auth.get("verification_uri_complete") or device_auth["verification_uri"]

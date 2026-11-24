@@ -6,6 +6,7 @@ own parameters, and passes the issuer's answers through, including to a real Dev
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import pytest
 from flask import Flask, jsonify, request
 from werkzeug.serving import make_server
 
-from c3g_oidc.client import DeviceCodeSession
+from c3g_oidc.client import DeviceCodeSession, DeviceLoginError
 from c3g_oidc.server import device_flow_broker
 
 CLIENT_ID = "cilogon:/client_id/app"
@@ -140,10 +141,33 @@ def test_caller_cannot_replace_the_client_or_add_parameters(issuer):
                               "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
 
 
-def test_unreachable_issuer_is_a_502():
-    response = _app("http://127.0.0.1:1").test_client().post("/auth/device_authorization")
+def test_unreachable_issuer_is_a_502(caplog):
+    """The public answer gives a reference, not the error (URL, host, proxy): that goes to the log."""
+    with caplog.at_level(logging.ERROR, logger="c3g_oidc.server.broker"):
+        response = _app("http://127.0.0.1:1").test_client().post("/auth/device_authorization")
 
-    assert response.status_code == 502 and response.get_json()["error"] == "temporarily_unavailable"
+    body = response.get_json()
+    assert response.status_code == 502 and body["error"] == "temporarily_unavailable"
+    assert "127.0.0.1" not in response.get_data(as_text=True)
+    reference = body["error_description"].rsplit("reference ", 1)[1].rstrip(")")
+    assert any(reference in record.getMessage() and "127.0.0.1" in record.getMessage() for record in caplog.records)
+
+
+def test_device_code_session_reports_an_unreachable_issuer(tmp_path: Path):
+    """A CLI starting a login through the broker while the issuer is down gets the broker's reference."""
+    server, thread, app_url = _serve(_app("http://127.0.0.1:1"))
+    try:
+        session = DeviceCodeSession(
+            "http://127.0.0.1:1", "pt-cli", str(tmp_path / "token.json"), display=lambda message: None,
+            device_authorization_endpoint=f"{app_url}/auth/device_authorization",
+            token_endpoint=f"{app_url}/auth/token",
+        )
+        with pytest.raises(DeviceLoginError, match=r"could not start: temporarily_unavailable \(identity provider "
+                                                   r"unreachable, try again later \(reference [0-9a-f]{12}\)\)"):
+            session.get_access_token()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_device_code_session_logs_in_through_the_broker(issuer, tmp_path: Path):
